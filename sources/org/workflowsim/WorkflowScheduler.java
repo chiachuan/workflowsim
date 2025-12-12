@@ -34,6 +34,7 @@ import org.workflowsim.scheduling.MinMinSchedulingAlgorithm;
 import org.workflowsim.scheduling.RoundRobinSchedulingAlgorithm;
 import org.workflowsim.custom.scheduler.SCEAHScheduler;
 import org.workflowsim.custom.scheduler.RCSECHScheduler;
+import org.workflowsim.custom.scheduler.FATSScheduler;
 import org.workflowsim.scheduling.StaticSchedulingAlgorithm;
 import org.workflowsim.utils.Parameters;
 import org.workflowsim.utils.Parameters.SchedulingAlgorithm;
@@ -171,6 +172,9 @@ public class WorkflowScheduler extends DatacenterBroker {
                 break;
             case RCSECH:
                 algorithm = new RCSECHScheduler();
+                break;
+            case FATS:
+                algorithm = new FATSScheduler();
                 break;
             
             default:

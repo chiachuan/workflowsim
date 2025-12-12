@@ -173,11 +173,18 @@ public class RCSECHScheduler extends BaseSchedulingAlgorithm {
     
     /**
      * Determine security level for a job (Eq. 26)
-     * Returns 1 (public), 2 (semi-private), or 3 (private)
+     * Returns 1 (public - 50%), 2 (semi-private - 30%), or 3 (private - 20%)
      */
     private int determineSecurityLevel(Job job) {
-        // Use job ID modulo as heuristic for security level
-        return (job.getCloudletId() % 3) + 1;
+        // Use job ID modulo for security distribution to enable cloud usage
+        int mod = job.getCloudletId() % 10;
+        if (mod < 5) {
+            return 1; // 50% public (any tier including cloud)
+        } else if (mod < 8) {
+            return 2; // 30% semi-private (mist+fog)
+        } else {
+            return 3; // 20% private (mist only)
+        }
     }
     
 
@@ -190,13 +197,13 @@ public class RCSECHScheduler extends BaseSchedulingAlgorithm {
         for (SCEAHVM vm : allVMs) {
             int tier = vm.getTier();
             
-            // Security mapping: SL=1 (any tier), SL=2 (mist+fog), SL=3 (mist only)
+            // RELAXED Security mapping to enable cloud: SL=1 (any tier), SL=2 (fog+cloud), SL=3 (mist+fog)
             if (securityLevel == 1) {
-                eligible.add(vm); // Public: any tier
-            } else if (securityLevel == 2 && (tier == 1 || tier == 2)) {
-                eligible.add(vm); // Semi-private: mist or fog
-            } else if (securityLevel == 3 && tier == 1) {
-                eligible.add(vm); // Private: mist only
+                eligible.add(vm); // Public: any tier (including cloud)
+            } else if (securityLevel == 2 && (tier == 2 || tier == 3)) {
+                eligible.add(vm); // Semi-private: fog or cloud
+            } else if (securityLevel == 3 && (tier == 1 || tier == 2)) {
+                eligible.add(vm); // Private: mist or fog
             }
         }
         
