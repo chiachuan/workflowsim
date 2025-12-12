@@ -83,17 +83,20 @@ public class SCEAHSchedulingAlgorithmExample extends DataAwareSchedulingAlgorith
 
         // 2. Define Host and PE characteristics
         int hostId = 0;
-        int hostRam = 2048;   // Host memory (RAM) in MB
+        int hostRam = 3072;   // Host memory (RAM) in MB (increased to support 5 VMs)
         long hostBw = 10000;   // Host bandwidth in Mb/s
         long hostStorage = 1000000; // Host storage in MB
         
         // Define the processing elements (PEs) for the Host
         List<Pe> peList = new ArrayList<>();
-        int mips = 80000; // MIPS capacity of a single PE
+        int mips = 5000000; // MIPS capacity of a single PE (increased to allow more VMs)
 
-        // Create two PEs (cores) for the host
+        // Create 5 PEs (cores) for the host to support 5 VMs
         peList.add(new Pe(0, new PeProvisionerSimple(mips))); 
-        peList.add(new Pe(1, new PeProvisionerSimple(mips))); 
+        peList.add(new Pe(1, new PeProvisionerSimple(mips)));
+        peList.add(new Pe(2, new PeProvisionerSimple(mips)));
+        peList.add(new Pe(3, new PeProvisionerSimple(mips)));
+        peList.add(new Pe(4, new PeProvisionerSimple(mips))); 
       
      // 3. Create the Host
         Host host = new Host(
@@ -178,13 +181,13 @@ public class SCEAHSchedulingAlgorithmExample extends DataAwareSchedulingAlgorith
         try {
             int vmNum = 5; // number of vms;
             
-            // **CHANGE THIS PATH** based on your environment
-            String daxPath = "C:\\workflowsim\\config\\dax\\Montage_100.xml"; 
+            String daxPath = "config/dax/Montage_100.xml"; 
             File daxFile = new File(daxPath);
             if (!daxFile.exists()) {
-                Log.printLine("Warning: Please replace daxPath with the physical path in your working environment! File not found at: " + daxPath);
+                Log.printLine("Warning: DAX file not found at: " + daxPath);
                 return;
             }
+            Log.printLine("DAX file found at: " + daxFile.getAbsolutePath());
 
             Parameters.SchedulingAlgorithm sch_method = Parameters.SchedulingAlgorithm.SCEAH;
             Parameters.PlanningAlgorithm pln_method = Parameters.PlanningAlgorithm.INVALID; 
@@ -195,13 +198,11 @@ public class SCEAHSchedulingAlgorithmExample extends DataAwareSchedulingAlgorith
             ClusteringParameters cp = new ClusteringParameters(0, 0, method, null); 
             
             /**
-             * FIX 1: Set the Task Factory Class Name to NULL.
-             * This bypasses the attempt to load a non-existent TaskFactory class.
-             * WorkflowSim will now create default Task objects from the DAX file.
+             * No task factory - use default Task objects.
              */
             Parameters.init(vmNum, daxPath, null,
                     null, op, cp, sch_method, pln_method,
-                    null, 0); // Task Factory set to null
+                    null, 0);
             
             ReplicaCatalog.init(file_system);
 
@@ -218,105 +219,20 @@ public class SCEAHSchedulingAlgorithmExample extends DataAwareSchedulingAlgorith
             WorkflowPlanner wfPlanner = new WorkflowPlanner("planner_0", 1);
             WorkflowEngine wfEngine = wfPlanner.getWorkflowEngine();
             
+            // Manually parse the workflow to get tasks
+            wfPlanner.getWorkflowParser().parse();
+            List<Task> taskList = wfPlanner.getWorkflowParser().getTaskList();
+            Log.printLine("Parsed " + taskList.size() + " tasks from DAX file");
+            
+            // Submit tasks directly to the engine (not through planner)
+            wfEngine.submitCloudletList((List)taskList);
+            
             // Call the custom VM creator
             List<SCEAHVM> vmlist0 = createVM(wfEngine.getSchedulerId(0), Parameters.getVmNum(), 
                     VM_MIPS, VM_PES, VM_RAM, VM_BW, VM_SIZE, VM_VMM); 
             
             // Submits this list of vms to this WorkflowEngine.
             wfEngine.submitVmList((List)vmlist0, 0); 
-
-            /**
-             * FIX 2: MANUAL TASK CONVERSION
-             * This section manually loads the tasks, converts them from the
-             * standard Task class to the SecureReliableTask class, and 
-             * submits them to the engine, resolving the TaskFactory issue.
-             */
-
-            // 1. Load the DAG (This creates standard Task/Job objects)
-            // **FIX 5: Call the correct method on WorkflowParser**
-            wfPlanner.getWorkflowParser().parse();
-
-            // 2. Get the list of all tasks/jobs directly from the parser
-            //    (Since wfPlanner.getTaskList() relies on internal event processing)
-            List<Task> allItemsList = wfPlanner.getWorkflowParser().getTaskList();
-
-            // List to hold the newly created Job objects with converted tasks
-            List<Job> customJobList = new ArrayList<>();
-
-            // 3. Iterate over the items (which may be Tasks or Jobs) and replace inner Tasks.
-            for (Task taskItem : allItemsList) {
-                
-                // Check if the item is a Job (which contains clustered tasks)
-                if (taskItem instanceof Job) { 
-                    
-                    Job originalJob = (Job) taskItem;
-                    
-                    // **CRITICAL FIX 1: The original Job object is already a Task, convert its *inner* tasks.**
-                    List<Task> originalInnerTasks = originalJob.getTaskList();
-                    List<Task> secureInnerTasks = new ArrayList<>();
-                    
-                    // Loop through the tasks *inside* the Job object
-                    for (Task originalTask : originalInnerTasks) {
-                        
-                        // --- Custom Logic: Determine Security/Level (Heuristic) ---
-                        int level; 
-                        boolean isSecure;
-                        
-                        // Example Heuristic: Tasks with long execution time are Secure/Level 2
-                        if (originalTask.getCloudletLength() > 50000) {
-                            level = 2; 
-                            isSecure = true;
-                        } else {
-                            level = 1; 
-                            isSecure = false;
-                        }
-                        
-                        // Create the SecureReliableTask, copying properties
-                        SecureReliableTask srt = new SecureReliableTask(
-                            originalTask.getCloudletId(),
-                            originalTask.getCloudletLength(),
-                            originalTask.getNumberOfPes(),
-                            originalTask.getCloudletFileSize(),
-                            originalTask.getCloudletOutputSize(),
-                            new UtilizationModelFull(), 
-                            new UtilizationModelFull(),
-                            new UtilizationModelFull(),
-                            level,
-                            isSecure,
-                            false 
-                        );
-                        
-                        // Crucially, copy the DAG structure (parents/children)
-                        srt.setParentList(originalTask.getParentList());
-                        srt.setChildList(originalTask.getChildList());
-                        
-                        // Add the new SecureReliableTask to the new list
-                        secureInnerTasks.add(srt);
-                    }
-                    
-                    // **CRITICAL FIX 3: Recreate the Job and add the new task list**
-                    Job secureJob = new Job(originalJob.getCloudletId(), originalJob.getCloudletLength());
-                    
-                    // Copy the critical Job properties:
-                    secureJob.setVmId(originalJob.getVmId());
-                    secureJob.setDepth(originalJob.getDepth());
-                    
-                    // Copy the DAG structure *for the Job itself* (parents/children between jobs)
-                    secureJob.setParentList(originalJob.getParentList()); 
-                    secureJob.setChildList(originalJob.getChildList()); 
-                    
-                    // Set the list of secure tasks inside the new Job
-                    secureJob.setTaskList(secureInnerTasks); 
-                    
-                    // Add the new Job to the final list
-                    customJobList.add(secureJob);
-                    
-                } 
-                // else block for standalone tasks (not clustered) is omitted for simplicity
-            } 
-            
-            // 4. Submit the converted job list to the engine.
-            wfEngine.submitCloudletList((List<Cloudlet>)(List<?>)customJobList); 
 
             // Binds the data centers with the scheduler.
             wfEngine.bindSchedulerDatacenter(datacenter0.getId(), 0);
